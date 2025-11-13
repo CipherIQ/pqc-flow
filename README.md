@@ -143,12 +143,18 @@ sudo pkill tcpdump
 
 ### Live Monitoring
 
+**Option 1: Using sudo (simplest, works from build directory):**
 ```bash
-# Grant capabilities (one-time)
-sudo setcap cap_net_raw,cap_net_admin+ep ./pqc-flow
+sudo ./build/pqc-flow --live eth0 | jq 'select(.pqc_flags > 0)'
+```
 
-# Monitor in real-time
-./pqc-flow --live eth0 | jq 'select(.pqc_flags > 0)'
+**Option 2: Using capabilities (production, after install):**
+```bash
+# One-time setup (after sudo make install)
+sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/pqc-flow
+
+# Then run without sudo (uses installed binary in PATH)
+pqc-flow --live eth0 | jq 'select(.pqc_flags > 0)'
 ```
 
 **Use cases:**
@@ -328,12 +334,21 @@ sudo pkill tcpdump
 
 ### Live Network Monitoring
 
-```bash
-# Grant capabilities (one-time)
-sudo setcap cap_net_raw,cap_net_admin+ep ./pqc-flow
+**Requires packet capture privileges.** Choose one:
 
-# Run live
-./pqc-flow --live <interface> [--fanout N] [--snaplen BYTES] [--json]
+**Development (from build directory):**
+```bash
+sudo ./build/pqc-flow --live <interface> [options]
+```
+
+**Production (installed binary):**
+```bash
+# One-time setup
+sudo make install  # Installs to /usr/local/bin
+sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/pqc-flow
+
+# Then run without sudo
+pqc-flow --live <interface> [options]
 ```
 
 **Options:**
@@ -346,14 +361,14 @@ sudo setcap cap_net_raw,cap_net_admin+ep ./pqc-flow
 
 **Security dashboard feed:**
 ```bash
-./pqc-flow --live eth0 --json | \
+sudo ./build/pqc-flow --live eth0 --json | \
   jq -c '{ts: (.ts_us/1000000|todate), server: .dip, proto: (if .sp==22 or .dp==22 then "SSH" else "TLS" end), pqc: (.pqc_flags>0), alg: (.ssh_kex_negotiated//.tls_negotiated_group)}' | \
   curl -X POST localhost:9200/pqc-flows/_bulk --data-binary @-
 ```
 
 **Alert on classical crypto to critical servers:**
 ```bash
-./pqc-flow --live eth0 --json | \
+sudo ./build/pqc-flow --live eth0 --json | \
   jq -c 'select(.pqc_flags == 0 and (.dip | IN("10.0.1.100", "10.0.1.101")))' | \
   while read flow; do
     echo "ALERT: Quantum-vulnerable connection: $flow" | mail -s "PQC Alert" security@company.com
@@ -362,7 +377,7 @@ sudo setcap cap_net_raw,cap_net_admin+ep ./pqc-flow
 
 **Live statistics:**
 ```bash
-./pqc-flow --live eth0 --json | \
+sudo ./build/pqc-flow --live eth0 --json | \
   jq -s 'group_by(.pqc_flags>0) | map({pqc: .[0].pqc_flags>0, count: length})'
 # Run for 1 hour, Ctrl+C, see: [{pqc: true, count: 450}, {pqc: false, count: 50}]
 ```
@@ -502,8 +517,16 @@ sudo yum install cmake libpcap-devel gcc make pkg-config
 
 ### Systemd Service (24/7 Monitoring)
 
+**Prerequisites:**
+```bash
+# Install binary and set capabilities
+cd build
+sudo make install  # Installs to /usr/local/bin/pqc-flow
+sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/pqc-flow
+```
+
+**Service configuration** (`/etc/systemd/system/pqc-flow.service`):
 ```ini
-# /etc/systemd/system/pqc-flow.service
 [Unit]
 Description=PQC Flow Analyzer
 After=network-online.target
@@ -516,7 +539,9 @@ StandardError=append:/var/log/pqc-flow/stats.log
 Restart=always
 RuntimeMaxSec=21600
 
-# Security
+# Security (requires setcap on binary, see Prerequisites above)
+User=nobody
+Group=nogroup
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=true
@@ -525,8 +550,11 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
+**Deploy:**
 ```bash
 sudo mkdir -p /var/log/pqc-flow
+sudo chown nobody:nogroup /var/log/pqc-flow
+sudo systemctl daemon-reload
 sudo systemctl enable --now pqc-flow
 
 # Monitor
@@ -651,21 +679,21 @@ req.tp_block_nr = 256;
 **Snaplen:**
 ```bash
 # Default: 2048 bytes (sufficient for handshakes)
-./pqc-flow --live eth0 --snaplen 2048
+sudo ./build/pqc-flow --live eth0 --snaplen 2048
 
 # Large ClientHello (many extensions): 4096 bytes
-./pqc-flow --live eth0 --snaplen 4096
+sudo ./build/pqc-flow --live eth0 --snaplen 4096
 ```
 
 **Multi-core scaling:**
 ```bash
 # CPU 0
-taskset -c 0 ./pqc-flow --live eth0 --fanout 100 --json > flows-0.jsonl &
+sudo taskset -c 0 ./build/pqc-flow --live eth0 --fanout 100 --json > flows-0.jsonl &
 
 # CPU 1
-taskset -c 1 ./pqc-flow --live eth0 --fanout 100 --json > flows-1.jsonl &
+sudo taskset -c 1 ./build/pqc-flow --live eth0 --fanout 100 --json > flows-1.jsonl &
 
-# Kernel load-balances via PACKET_FANOUT_HASH
+# Kernel load-balances flows via PACKET_FANOUT_HASH
 ```
 
 ---
@@ -703,7 +731,10 @@ ndpiReader -i file.pcap 2>&1 | grep -i 'ssh\|tls'
 ### Live Mode Shows No Output
 
 **Checklist:**
-1. ✅ Permissions: `sudo` or `cap_net_raw,cap_net_admin+ep` set
+1. ✅ **Permissions**: Use `sudo`, OR set capabilities on the binary you're running:
+   - Build directory: `sudo setcap cap_net_raw,cap_net_admin+ep ./build/pqc-flow`
+   - Installed: `sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/pqc-flow`
+   - **Note**: Capabilities are lost on rebuild; sudo is simpler for development
 2. ✅ Interface exists: `ip link show eth0`
 3. ✅ Traffic present: `sudo tcpdump -i eth0 -c 10`
 4. ✅ Port filtering: Only monitors 22, 443, 500, 4500, 51820 (UDP/443)
@@ -712,8 +743,35 @@ ndpiReader -i file.pcap 2>&1 | grep -i 'ssh\|tls'
 **Debug:**
 ```bash
 # Check stderr for stats
-./pqc-flow --live eth0 2>&1 | grep LIVE
+sudo ./build/pqc-flow --live eth0 2>&1 | grep LIVE
 # Should see: [LIVE] Capturing... and periodic stats
+```
+
+### Permission Errors (Live Mode)
+
+**Error:**
+```
+socket(AF_PACKET): Operation not permitted
+```
+
+**Fix - Choose one:**
+
+**Option 1 (Simple):** Run with sudo
+```bash
+sudo ./build/pqc-flow --live eth0
+```
+
+**Option 2 (Production):** Set capabilities on installed binary
+```bash
+sudo make install
+sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/pqc-flow
+pqc-flow --live eth0  # Now works without sudo
+```
+
+**Common mistake:** Setting capabilities on build binary, then rebuilding
+```bash
+sudo setcap ... ./build/pqc-flow  # ❌ Capabilities lost on next make
+# Fix: Use sudo for development, or set on installed binary only
 ```
 
 ### Build Errors
@@ -748,14 +806,14 @@ error: too many/few arguments to 'ndpi_detection_process_packet'
 **Accessing stats:**
 ```bash
 # Live mode stderr
-./pqc-flow --live eth0 2>&1 | grep "Stats:"
+sudo ./build/pqc-flow --live eth0 2>&1 | grep "Stats:"
 # Output: [LIVE] Stats: 27000 pkts, 3216 filtered, 486 flows, 320 exports
 ```
 
 **Custom aggregation** (post-processing):
 ```bash
 # Hourly PQC adoption rate
-./pqc-flow --live eth0 --json | \
+sudo ./build/pqc-flow --live eth0 --json | \
   jq -c '{hour: (.ts_us/1000000/3600|floor), pqc: (.pqc_flags>0)}' | \
   jq -s 'group_by(.hour) | map({hour: .[0].hour, total: length, pqc: map(select(.pqc))|length})'
 ```
@@ -764,7 +822,7 @@ error: too many/few arguments to 'ndpi_detection_process_packet'
 
 **Client inventory by MAC:**
 ```bash
-./pqc-flow --live eth0 --json | \
+sudo ./build/pqc-flow --live eth0 --json | \
   jq -s 'group_by(.smac) | map({mac: .[0].smac, connections: length, pqc_pct: (map(select(.pqc_flags>0))|length*100/length)})'
 ```
 
@@ -961,21 +1019,29 @@ Open source—suitable for:
 ## Quick Reference
 
 ```bash
-# Install
-mkdir build && cd build && cmake .. && make -j && sudo make install
+# Build
+mkdir build && cd build
+cmake .. -DENABLE_TESTS=ON && make -j
 
 # Test
-pqc-flow --mock | jq .
-pqc-flow file.pcap | jq 'select(.pqc_flags > 0)'
+./pqc-tests
+./pqc-flow --mock | jq .
 
-# Live
-sudo setcap cap_net_raw,cap_net_admin+ep ./pqc-flow
+# Analyze PCAP
+./pqc-flow file.pcap | jq 'select(.pqc_flags > 0)'
+
+# Live (from build directory)
+sudo ./build/pqc-flow --live eth0 --json | jq .
+
+# Live (installed, with capabilities - production)
+sudo make install
+sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/pqc-flow
 pqc-flow --live eth0 --json | jq .
 
 # Look for
-pqc_flags: 5        # Hybrid PQC (most common)
-ssh_kex_negotiated  # "sntrup761x25519-sha512@openssh.com"
-tls_negotiated_group # "X25519Kyber768"
+pqc_flags: 5          # Hybrid PQC (most common)
+ssh_kex_negotiated    # "sntrup761x25519-sha512@openssh.com"
+tls_negotiated_group  # "X25519Kyber768"
 ```
 
 **Detection confidence: HIGH**
