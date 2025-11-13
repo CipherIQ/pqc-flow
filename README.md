@@ -108,9 +108,14 @@ sudo pkill tcpdump
   "dip": "35.162.246.73",
   "sp": 52341,
   "dp": 22,
+  "smac": "d0:46:0c:e1:7d:e8",
+  "dmac": "cc:28:aa:6a:4b:18",
   "pqc_flags": 5,
   "pqc_reason": "ssh:sntrup|ssh:ntru|",
-  "ssh_kex_negotiated": "sntrup761x25519-sha512@openssh.com"
+  "tls_negotiated_group": "",
+  "ssh_kex_negotiated": "sntrup761x25519-sha512@openssh.com",
+  "quic_tls_negotiated_group": "",
+  "ike_ke_chosen": ""
 }
 ```
 
@@ -133,11 +138,18 @@ sudo pkill tcpdump
 {
   "ts_us": 1762983623087283,
   "proto": 6,
+  "sip": "192.168.50.71",
+  "dip": "104.18.31.220",
   "sp": 46514,
   "dp": 443,
+  "smac": "d0:46:0c:e1:7d:e8",
+  "dmac": "cc:28:aa:6a:4b:18",
   "pqc_flags": 5,
   "pqc_reason": "tls:kyber|",
-  "tls_negotiated_group": "X25519Kyber768"
+  "tls_negotiated_group": "X25519Kyber768",
+  "ssh_kex_negotiated": "",
+  "quic_tls_negotiated_group": "",
+  "ike_ke_chosen": ""
 }
 ```
 
@@ -156,6 +168,8 @@ sudo setcap cap_net_raw,cap_net_admin+ep /usr/local/bin/pqc-flow
 # Then run without sudo (uses installed binary in PATH)
 pqc-flow --live eth0 | jq 'select(.pqc_flags > 0)'
 ```
+
+**Live mode output** includes additional `"live": 1` field to distinguish from offline analysis.
 
 **Use cases:**
 - Continuous PQC readiness monitoring

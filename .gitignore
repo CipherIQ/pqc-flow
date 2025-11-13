@@ -4,6 +4,7 @@ tmp/
 # Ignore hidden Claude files (if present)
 .claude
 .CLAUDE
+CLAUDE.md
 
 # Common C build ignores
 build/
