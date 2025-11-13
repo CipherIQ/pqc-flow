@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+/*
+ * Copyright (c) 2025 Graziano Labs Corp.
+ */
+
+#pragma once
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+/* Return codes */
+typedef enum {
+  TLSPQC_IN_PROGRESS = 0,
+  TLSPQC_FOUND_PQC   = 1,   /* Negotiated group is PQC/hybrid */
+  TLSPQC_FOUND_CLASSIC = 2, /* Classical groups only */
+  TLSPQC_FAIL        = -1
+} tlspqc_rc;
+
+/* Internal FSM states */
+typedef enum {
+  TLS_S_START = 0,
+  TLS_S_REC_HDR,      /* Reading TLS record header */
+  TLS_S_HS_HDR,       /* Reading handshake message header */
+  TLS_S_HS_BODY,      /* Reading handshake message body */
+  TLS_S_DONE,
+  TLS_S_FAIL
+} tls_pqc_state;
+
+/* Per-flow TLS parser state (bounded memory) */
+typedef struct {
+  tls_pqc_state st;
+
+  /* TLS record header: [type:1][version:2][length:2] */
+  uint8_t rec_hdr[5];
+  size_t rec_hdr_have;
+  uint8_t rec_type;
+  uint16_t rec_len;
+
+  /* Handshake header: [msg_type:1][length:3] */
+  uint8_t hs_hdr[4];
+  size_t hs_hdr_have;
+  uint8_t hs_type;
+  uint32_t hs_len;
+
+  /* Handshake body buffer (ClientHello/ServerHello) */
+  uint8_t body[4096];
+  size_t body_have, body_need;
+
+  /* Extracted data */
+  char negotiated_group[64];
+  uint8_t seen_client_hello:1;
+  uint8_t seen_server_hello:1;
+  bool exported;
+} tls_pqc_fsm;
+
+static inline void tls_pqc_init(tls_pqc_fsm *f) {
+  *f = (tls_pqc_fsm){ .st = TLS_S_START };
+}
+
+/**
+ * Feed TCP payload bytes from TLS connection.
+ * @param payload   TCP payload (TLS records)
+ * @param plen      Payload length
+ * @param out_group Output buffer for negotiated group name
+ * @param out_cap   Output buffer capacity
+ * @return TLSPQC_* status code
+ */
+tlspqc_rc tls_pqc_feed(tls_pqc_fsm *f,
+                       const uint8_t *payload, size_t plen,
+                       char *out_group, size_t out_cap);

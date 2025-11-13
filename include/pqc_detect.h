@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+/*
+ * Copyright (c) 2025 Graziano Labs Corp.
+ */
+
+#ifndef PQC_DETECT_H
+#define PQC_DETECT_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+// PQC flags bitmask (general categories)
+enum {
+  PQC_KEM_PRESENT          = 1 << 0, // offered or chosen kem/kex includes PQC
+  PQC_SIG_PRESENT          = 1 << 1, // signatures/hostkeys include PQC
+  HYBRID_NEGOTIATED        = 1 << 2, // chosen kex is hybrid (classical + PQC)
+  PQC_OFFERED_ONLY         = 1 << 3, // seen only in offers
+  PQC_CERT_OR_HOSTKEY      = 1 << 4, // certificate or hostkey uses PQC/hybrid
+  RESUMPTION_NO_HANDSHAKE  = 1 << 5  // resumed/abbreviated session
+};
+
+// Protocol-specific flag aliases (for clarity in code)
+#define PQC_F_SSH_KEX    PQC_KEM_PRESENT
+#define PQC_F_TLS_GROUP  PQC_KEM_PRESENT
+#define PQC_F_IKE_KE     PQC_KEM_PRESENT
+#define PQC_F_QUIC_TLS   PQC_KEM_PRESENT
+
+// Flow metadata container (trimmed for starter)
+typedef struct {
+  // generic
+  uint8_t pqc_flags;
+  char pqc_reason[128];
+
+  // TLS/DTLS
+  char tls_supported_groups[256];
+  char tls_keyshare_groups[128];
+  char tls_negotiated_group[64];
+  char tls_sig_algs[128];
+  char tls_server_sigalg[64];
+
+  // SSH
+  char ssh_kex_offered[256];
+  char ssh_kex_negotiated[64];
+  char ssh_hostkey_offered[256];
+  char ssh_hostkey_negotiated[64];
+  char ssh_sig_alg[64];
+
+  // IKEv2
+  char ike_ke_offered[128];
+  char ike_ke_chosen[32];
+  char ike_vendor_ids[128];
+
+  // QUIC
+  char quic_tls_supported_groups[256];
+  char quic_tls_keyshare_groups[128];
+  char quic_tls_negotiated_group[64];
+  char quic_tls_sig_algs[128];
+
+  // WireGuard
+  uint8_t wg_pqc_flags;
+} FlowMeta;
+
+// Simple helpers
+int contains_token_ci(const char *hay, const char *tok);
+void pqc_mark_reason(char *reason, size_t cap, const char *proto, const char *tok);
+
+// Core detection function using strings already extracted from nDPI
+void pqc_from_strings(FlowMeta *f, const char *proto,
+                      const char *offered, const char *chosen,
+                      const char *sig_offered, const char *sig_used);
+
+#endif
