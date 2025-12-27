@@ -13,6 +13,7 @@
 #define TLS_RECORD_HANDSHAKE 0x16
 #define TLS_HS_CLIENT_HELLO  0x01
 #define TLS_HS_SERVER_HELLO  0x02
+#define TLS_EXT_SERVER_NAME      0x0000
 #define TLS_EXT_SUPPORTED_GROUPS 0x000a
 #define TLS_EXT_KEY_SHARE        0x0033
 
@@ -77,9 +78,48 @@ static int is_pqc_group(uint16_t id) {
   return 0;
 }
 
-/* Parse extensions to find supported_groups or key_share */
+/* Map TLS cipher suite ID to string */
+static const char* cipher_id_to_name(uint16_t id) {
+  switch(id) {
+    /* TLS 1.3 cipher suites */
+    case 0x1301: return "TLS_AES_128_GCM_SHA256";
+    case 0x1302: return "TLS_AES_256_GCM_SHA384";
+    case 0x1303: return "TLS_CHACHA20_POLY1305_SHA256";
+    case 0x1304: return "TLS_AES_128_CCM_SHA256";
+    case 0x1305: return "TLS_AES_128_CCM_8_SHA256";
+
+    /* TLS 1.2 ECDHE-RSA */
+    case 0xc02f: return "ECDHE-RSA-AES128-GCM-SHA256";
+    case 0xc030: return "ECDHE-RSA-AES256-GCM-SHA384";
+    case 0xc013: return "ECDHE-RSA-AES128-SHA";
+    case 0xc014: return "ECDHE-RSA-AES256-SHA";
+    case 0xcca8: return "ECDHE-RSA-CHACHA20-POLY1305";
+
+    /* TLS 1.2 ECDHE-ECDSA */
+    case 0xc02b: return "ECDHE-ECDSA-AES128-GCM-SHA256";
+    case 0xc02c: return "ECDHE-ECDSA-AES256-GCM-SHA384";
+    case 0xc009: return "ECDHE-ECDSA-AES128-SHA";
+    case 0xc00a: return "ECDHE-ECDSA-AES256-SHA";
+    case 0xcca9: return "ECDHE-ECDSA-CHACHA20-POLY1305";
+
+    /* TLS 1.2 DHE-RSA */
+    case 0x009e: return "DHE-RSA-AES128-GCM-SHA256";
+    case 0x009f: return "DHE-RSA-AES256-GCM-SHA384";
+
+    /* TLS 1.2 RSA (no PFS) */
+    case 0x009c: return "AES128-GCM-SHA256";
+    case 0x009d: return "AES256-GCM-SHA384";
+    case 0x002f: return "AES128-SHA";
+    case 0x0035: return "AES256-SHA";
+
+    default: return NULL;
+  }
+}
+
+/* Parse extensions to find supported_groups, key_share, and SNI */
 static int parse_extensions(const uint8_t *exts, size_t exts_len,
-                           uint16_t *out_negotiated, char *out_name, size_t out_cap) {
+                           uint16_t *out_negotiated, char *out_name, size_t out_cap,
+                           char *out_sni, size_t sni_cap) {
   size_t off = 0;
   int found_any = 0;
 
@@ -89,6 +129,21 @@ static int parse_extensions(const uint8_t *exts, size_t exts_len,
     off += 4;
 
     if(off + ext_len > exts_len) break;
+
+    /* Server Name Indication (SNI) - extension type 0x0000 */
+    if(ext_type == TLS_EXT_SERVER_NAME && ext_len >= 5 && out_sni) {
+      /* server_name_list = [list_len:2][name_type:1][name_len:2][name] */
+      uint16_t list_len = be16(exts + off);
+      if(2 + list_len <= ext_len && list_len >= 3) {
+        uint8_t name_type = exts[off + 2];
+        uint16_t name_len = be16(exts + off + 3);
+        if(name_type == 0 && 5 + name_len <= ext_len) { /* host_name type */
+          size_t copy_len = (name_len < sni_cap - 1) ? name_len : sni_cap - 1;
+          memcpy(out_sni, exts + off + 5, copy_len);
+          out_sni[copy_len] = '\0';
+        }
+      }
+    }
 
     if(ext_type == TLS_EXT_SUPPORTED_GROUPS && ext_len >= 2) {
       /* supported_groups = [length:2][group_list] */
@@ -139,7 +194,9 @@ static int parse_extensions(const uint8_t *exts, size_t exts_len,
 
 /* Parse ClientHello or ServerHello body */
 static int parse_hello(const uint8_t *body, size_t len, int is_server_hello,
-                      uint16_t *out_group, char *out_name, size_t out_cap) {
+                      uint16_t *out_group, char *out_name, size_t out_cap,
+                      char *out_sni, size_t sni_cap,
+                      uint16_t *out_cipher, char *out_cipher_name, size_t cipher_cap) {
   if(len < 34) return 0;
 
   size_t off = 2 + 32; /* Skip version + random */
@@ -164,14 +221,25 @@ static int parse_hello(const uint8_t *body, size_t len, int is_server_hello,
     if(off + cm_len > len) return 0;
     off += cm_len;
   } else {
-    /* ServerHello: simpler, often has cipher_suite after random */
-    /* TLS 1.3 ServerHello: [version:2][random:32][legacy_session_id:varies][cipher:2][compression:1][exts] */
-    /* Skip to extensions - try to find them */
-    /* For simplicity, look for extensions marker */
+    /* ServerHello: [version:2][random:32][session_id_len:1][session_id][cipher:2][compression:1][exts] */
     if(off + 1 > len) return 0;
     uint8_t sid_len = body[off++];
     if(off + sid_len + 3 > len) return 0; /* sid + cipher(2) + compression(1) */
-    off += sid_len + 3;
+    off += sid_len;
+
+    /* Extract cipher suite (2 bytes) */
+    uint16_t cipher_id = be16(body + off);
+    if(out_cipher) *out_cipher = cipher_id;
+    if(out_cipher_name) {
+      const char *name = cipher_id_to_name(cipher_id);
+      if(name) {
+        strncpy(out_cipher_name, name, cipher_cap - 1);
+        out_cipher_name[cipher_cap - 1] = '\0';
+      } else {
+        snprintf(out_cipher_name, cipher_cap, "0x%04X", cipher_id);
+      }
+    }
+    off += 3; /* cipher(2) + compression(1) */
   }
 
   /* Extensions: [extensions_len:2][extension_list] */
@@ -180,7 +248,8 @@ static int parse_hello(const uint8_t *body, size_t len, int is_server_hello,
   off += 2;
   if(off + exts_len > len) return 0;
 
-  return parse_extensions(body + off, exts_len, out_group, out_name, out_cap);
+  return parse_extensions(body + off, exts_len, out_group, out_name, out_cap,
+                         out_sni, sni_cap);
 }
 
 /* Public FSM */
@@ -280,9 +349,13 @@ tlspqc_rc tls_pqc_feed(tls_pqc_fsm *f,
       /* Parse the hello message */
       uint16_t gid = 0;
       char gname[64] = {0};
+      char sni[256] = {0};
+      uint16_t cipher_id = 0;
+      char cipher_name[64] = {0};
       int is_sh = (f->hs_type == TLS_HS_SERVER_HELLO);
 
-      if(parse_hello(f->body, f->body_have, is_sh, &gid, gname, sizeof(gname))) {
+      if(parse_hello(f->body, f->body_have, is_sh, &gid, gname, sizeof(gname),
+                     sni, sizeof(sni), &cipher_id, cipher_name, sizeof(cipher_name))) {
         if(is_pqc_group(gid)) {
           strncpy(f->negotiated_group, gname, sizeof(f->negotiated_group) - 1);
           f->negotiated_group[sizeof(f->negotiated_group) - 1] = '\0';
@@ -300,6 +373,15 @@ tlspqc_rc tls_pqc_feed(tls_pqc_fsm *f,
             out_group[out_cap - 1] = '\0';
           }
         }
+      }
+
+      /* Store extracted metadata in FSM */
+      if(sni[0] && !f->server_name[0]) {
+        strncpy(f->server_name, sni, sizeof(f->server_name) - 1);
+      }
+      if(cipher_name[0]) {
+        strncpy(f->cipher_suite, cipher_name, sizeof(f->cipher_suite) - 1);
+        f->cipher_id = cipher_id;
       }
 
       /* Mark which hello we've seen */

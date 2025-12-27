@@ -49,6 +49,9 @@ typedef struct {
 
   /* Extracted data */
   char negotiated_group[64];
+  char server_name[256];         /* SNI from ClientHello */
+  char cipher_suite[64];         /* Selected cipher from ServerHello */
+  uint16_t cipher_id;            /* Cipher suite ID */
   uint8_t seen_client_hello:1;
   uint8_t seen_server_hello:1;
   bool exported;
