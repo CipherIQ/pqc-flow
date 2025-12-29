@@ -50,6 +50,8 @@ typedef struct {
   char ssh_hostkey_offered[256];
   char ssh_hostkey_negotiated[64];
   char ssh_sig_alg[64];
+  char ssh_cipher[64];                   // Negotiated encryption cipher
+  char ssh_mac[64];                      // Negotiated MAC algorithm
 
   // IKEv2
   char ike_ke_offered[128];

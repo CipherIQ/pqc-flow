@@ -63,3 +63,16 @@ sshkex_rc ssh_kex_feed(ssh_kex_fsm *f,
                        const uint8_t *payload, size_t plen,
                        int from_client,
                        char *out_alg, size_t out_cap);
+
+/**
+ * Extract specific algorithm types from KEXINIT payload (SSH_MSG_KEXINIT message).
+ * These functions can be called after ssh_kex_feed returns FOUND_* and the body is available.
+ * @param p    Pointer to KEXINIT payload (starting at message type byte 0x14)
+ * @param n    Length of payload
+ * @param out  Output buffer for algorithm name
+ * @param cap  Capacity of output buffer
+ * @return 1 on success, 0 on failure
+ */
+int kexinit_extract_hostkey(const uint8_t *p, size_t n, char *out, size_t cap);
+int kexinit_extract_cipher(const uint8_t *p, size_t n, char *out, size_t cap);
+int kexinit_extract_mac(const uint8_t *p, size_t n, char *out, size_t cap);

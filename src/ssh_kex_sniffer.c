@@ -46,6 +46,63 @@ static int is_pqc_kex_token(const char *t, size_t L){
   return 0;
 }
 
+/* Skip to name-list at given index in KEXINIT and return offset to it.
+ * KEXINIT name-lists: 0=kex_algorithms, 1=server_host_key_algorithms,
+ * 2=encryption_c2s, 3=encryption_s2c, 4=mac_c2s, 5=mac_s2c, 6-9=compression/languages
+ * Returns 0 on error, otherwise offset to the start of the name-list length field.
+ */
+static size_t kexinit_skip_to_namelist(const uint8_t *p, size_t n, int list_index) {
+  if(n < 1 + 16) return 0;           /* type + cookie */
+  if(p[0] != 20) return 0;           /* SSH_MSG_KEXINIT */
+  size_t off = 1 + 16;               /* skip type byte + 16-byte cookie */
+
+  for(int i = 0; i < list_index; i++) {
+    if(off + 4 > n) return 0;
+    uint32_t len = be32(p + off);
+    off += 4 + len;
+    if(off > n) return 0;
+  }
+  return off;
+}
+
+/* Extract first entry from a name-list at given index in KEXINIT.
+ * Returns 1 on success, 0 on failure.
+ */
+static int kexinit_extract_namelist_first(const uint8_t *p, size_t n, int list_index,
+                                          char *out, size_t cap) {
+  size_t off = kexinit_skip_to_namelist(p, n, list_index);
+  if(off == 0) return 0;
+
+  const char *csv = NULL; uint32_t L = 0;
+  if(!parse_namelist(p + off, n - off, &csv, &L)) return 0;
+
+  /* Get first token from CSV */
+  size_t it = 0;
+  const char *tok = NULL; size_t tlen = 0;
+  if(token_next(csv, L, &it, &tok, &tlen) && tlen > 0) {
+    size_t m = (tlen < cap - 1) ? tlen : cap - 1;
+    memcpy(out, tok, m);
+    out[m] = '\0';
+    return 1;
+  }
+  return 0;
+}
+
+/* Extract host key algorithm (list index 1) */
+int kexinit_extract_hostkey(const uint8_t *p, size_t n, char *out, size_t cap) {
+  return kexinit_extract_namelist_first(p, n, 1, out, cap);
+}
+
+/* Extract cipher algorithm (list index 2 = encryption_c2s, we use client's first offer) */
+int kexinit_extract_cipher(const uint8_t *p, size_t n, char *out, size_t cap) {
+  return kexinit_extract_namelist_first(p, n, 2, out, cap);
+}
+
+/* Extract MAC algorithm (list index 4 = mac_c2s) */
+int kexinit_extract_mac(const uint8_t *p, size_t n, char *out, size_t cap) {
+  return kexinit_extract_namelist_first(p, n, 4, out, cap);
+}
+
 /* Extract chosen (or first) KEX from KEXINIT "kex_algorithms" name-list */
 static int kexinit_extract_kex(const uint8_t *p, size_t n, char *out, size_t cap, int *is_pqc){
   /* p points to payload starting at message code (0x14) */
