@@ -35,9 +35,9 @@ typedef struct {
   // TLS/DTLS
   char tls_supported_groups[256];
   char tls_keyshare_groups[128];
-  char tls_negotiated_group[64];
+  char tls_negotiated_group[128];
   char tls_sig_algs[128];
-  char tls_server_sigalg[64];
+  char tls_server_sigalg[128];
   char tls_server_name[256];           // SNI from ClientHello
   char tls_cipher_suite[64];           // Negotiated cipher suite
   char tls_cert_fingerprint[65];       // SHA256 fingerprint of leaf cert (hex)
@@ -46,22 +46,22 @@ typedef struct {
 
   // SSH
   char ssh_kex_offered[256];
-  char ssh_kex_negotiated[64];
+  char ssh_kex_negotiated[256];
   char ssh_hostkey_offered[256];
-  char ssh_hostkey_negotiated[64];
-  char ssh_sig_alg[64];
-  char ssh_cipher[64];                   // Negotiated encryption cipher
-  char ssh_mac[64];                      // Negotiated MAC algorithm
+  char ssh_hostkey_negotiated[128];
+  char ssh_sig_alg[128];
+  char ssh_cipher[96];                   // Negotiated encryption cipher
+  char ssh_mac[96];                      // Negotiated MAC algorithm
 
   // IKEv2
   char ike_ke_offered[128];
-  char ike_ke_chosen[32];
+  char ike_ke_chosen[64];
   char ike_vendor_ids[128];
 
   // QUIC
   char quic_tls_supported_groups[256];
   char quic_tls_keyshare_groups[128];
-  char quic_tls_negotiated_group[64];
+  char quic_tls_negotiated_group[128];
   char quic_tls_sig_algs[128];
 
   // WireGuard
