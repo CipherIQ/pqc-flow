@@ -38,6 +38,11 @@ typedef struct {
   char tls_negotiated_group[64];
   char tls_sig_algs[128];
   char tls_server_sigalg[64];
+  char tls_server_name[256];           // SNI from ClientHello
+  char tls_cipher_suite[64];           // Negotiated cipher suite
+  char tls_cert_fingerprint[65];       // SHA256 fingerprint of leaf cert (hex)
+  char tls_cert_subject[256];          // Leaf certificate subject
+  char tls_cert_issuer[256];           // Leaf certificate issuer
 
   // SSH
   char ssh_kex_offered[256];

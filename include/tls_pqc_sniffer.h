@@ -52,9 +52,17 @@ typedef struct {
   char server_name[256];         /* SNI from ClientHello */
   char cipher_suite[64];         /* Selected cipher from ServerHello */
   uint16_t cipher_id;            /* Cipher suite ID */
+  uint16_t offered_version;      /* TLS version from ClientHello */
+  uint16_t negotiated_version;   /* TLS version from ServerHello */
   uint8_t seen_client_hello:1;
   uint8_t seen_server_hello:1;
+  uint8_t seen_certificate:1;
   bool exported;
+
+  /* Certificate data (from Certificate message) */
+  char cert_fingerprint[65];     /* SHA256 hex (64 chars + null) */
+  char cert_subject[256];        /* Leaf certificate subject */
+  char cert_issuer[256];         /* Leaf certificate issuer */
 } tls_pqc_fsm;
 
 static inline void tls_pqc_init(tls_pqc_fsm *f) {

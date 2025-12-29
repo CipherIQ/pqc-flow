@@ -11,6 +11,9 @@ option(ENABLE_TESTS "Build unit tests" ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PCAP REQUIRED libpcap)
 
+# Find OpenSSL (for SHA256 fingerprinting and X509 parsing)
+find_package(OpenSSL REQUIRED)
+
 # Find nDPI (expects pkg-config file 'ndpi' on your system)
 # On some systems it's named 'ndpi' or 'libndpi'. Try both.
 pkg_check_modules(NDPI QUIET ndpi)
@@ -44,6 +47,8 @@ add_executable(pqc-flow
 target_link_libraries(pqc-flow
   ${NDPI_LIBRARIES}
   ${PCAP_LIBRARIES}
+  OpenSSL::SSL
+  OpenSSL::Crypto
 )
 
 # Tests (simple C unit tests without external frameworks)

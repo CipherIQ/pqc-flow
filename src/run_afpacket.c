@@ -154,13 +154,17 @@ static void export_jsonl(const FTEntry *e) {
   printf("{\"live\":1,\"ts_us\":%llu,\"proto\":%u,\"sip\":\"%s\",\"dip\":\"%s\",\"sp\":%u,\"dp\":%u,"
          "\"smac\":\"%s\",\"dmac\":\"%s\","
          "\"pqc_flags\":%u,\"pqc_reason\":\"%s\","
-         "\"tls_negotiated_group\":\"%s\",\"ssh_kex_negotiated\":\"%s\","
+         "\"tls_negotiated_group\":\"%s\",\"tls_server_name\":\"%s\",\"tls_cipher_suite\":\"%s\","
+         "\"tls_cert_fingerprint\":\"%s\",\"tls_cert_subject\":\"%s\",\"tls_cert_issuer\":\"%s\","
+         "\"ssh_kex_negotiated\":\"%s\","
          "\"quic_tls_negotiated_group\":\"%s\",\"ike_ke_chosen\":\"%s\"}\n",
          (unsigned long long)e->first_seen_ts,
          e->fr.l4_proto, sip, dip, e->fr.src_port, e->fr.dst_port,
          smac, dmac,
          m->pqc_flags, m->pqc_reason,
-         m->tls_negotiated_group, m->ssh_kex_negotiated,
+         m->tls_negotiated_group, m->tls_server_name, m->tls_cipher_suite,
+         m->tls_cert_fingerprint, m->tls_cert_subject, m->tls_cert_issuer,
+         m->ssh_kex_negotiated,
          m->quic_tls_negotiated_group, m->ike_ke_chosen);
   fflush(stdout);
 }
@@ -371,6 +375,22 @@ int run_afpacket(const char *iface, NdpiCtx *ctx, int fanout_id, int snaplen) {
             if(rc == TLSPQC_FOUND_PQC) {
               e->fw.meta.pqc_flags |= PQC_F_TLS_GROUP;
               /* pqc_from_strings() will mark TLS PQC tokens */
+            }
+            /* Copy TLS metadata from FSM to FlowMeta for export */
+            if(e->tls_fsm.server_name[0]) {
+              strncpy(e->fw.meta.tls_server_name, e->tls_fsm.server_name, sizeof(e->fw.meta.tls_server_name)-1);
+            }
+            if(e->tls_fsm.cipher_suite[0]) {
+              strncpy(e->fw.meta.tls_cipher_suite, e->tls_fsm.cipher_suite, sizeof(e->fw.meta.tls_cipher_suite)-1);
+            }
+            if(e->tls_fsm.cert_fingerprint[0]) {
+              strncpy(e->fw.meta.tls_cert_fingerprint, e->tls_fsm.cert_fingerprint, sizeof(e->fw.meta.tls_cert_fingerprint)-1);
+            }
+            if(e->tls_fsm.cert_subject[0]) {
+              strncpy(e->fw.meta.tls_cert_subject, e->tls_fsm.cert_subject, sizeof(e->fw.meta.tls_cert_subject)-1);
+            }
+            if(e->tls_fsm.cert_issuer[0]) {
+              strncpy(e->fw.meta.tls_cert_issuer, e->tls_fsm.cert_issuer, sizeof(e->fw.meta.tls_cert_issuer)-1);
             }
           }
         }

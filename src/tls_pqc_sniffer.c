@@ -9,13 +9,19 @@
 #include <string.h>
 #include <stdio.h>
 
+/* For SHA256 fingerprint */
+#include <openssl/sha.h>
+#include <openssl/x509.h>
+
 /* TLS constants */
 #define TLS_RECORD_HANDSHAKE 0x16
 #define TLS_HS_CLIENT_HELLO  0x01
 #define TLS_HS_SERVER_HELLO  0x02
-#define TLS_EXT_SERVER_NAME      0x0000
-#define TLS_EXT_SUPPORTED_GROUPS 0x000a
-#define TLS_EXT_KEY_SHARE        0x0033
+#define TLS_HS_CERTIFICATE   0x0b
+#define TLS_EXT_SERVER_NAME        0x0000
+#define TLS_EXT_SUPPORTED_GROUPS   0x000a
+#define TLS_EXT_SUPPORTED_VERSIONS 0x002b
+#define TLS_EXT_KEY_SHARE          0x0033
 
 /* Utility functions */
 static inline uint16_t be16(const uint8_t *p) {
@@ -116,10 +122,11 @@ static const char* cipher_id_to_name(uint16_t id) {
   }
 }
 
-/* Parse extensions to find supported_groups, key_share, and SNI */
+/* Parse extensions to find supported_groups, key_share, SNI, and supported_versions */
 static int parse_extensions(const uint8_t *exts, size_t exts_len,
                            uint16_t *out_negotiated, char *out_name, size_t out_cap,
-                           char *out_sni, size_t sni_cap) {
+                           char *out_sni, size_t sni_cap,
+                           int is_server_hello, uint16_t *out_version) {
   size_t off = 0;
   int found_any = 0;
 
@@ -186,6 +193,24 @@ static int parse_extensions(const uint8_t *exts, size_t exts_len,
       }
     }
 
+    /* supported_versions extension (0x002b) - TLS 1.3 actual version */
+    if(ext_type == TLS_EXT_SUPPORTED_VERSIONS && out_version) {
+      if(is_server_hello) {
+        /* ServerHello: [selected_version:2] */
+        if(ext_len >= 2) {
+          *out_version = be16(exts + off);
+        }
+      } else {
+        /* ClientHello: [length:1][version_list] - take first (highest) */
+        if(ext_len >= 3) {
+          uint8_t list_len = exts[off];
+          if(list_len >= 2 && 1 + list_len <= ext_len) {
+            *out_version = be16(exts + off + 1);
+          }
+        }
+      }
+    }
+
     off += ext_len;
   }
 
@@ -196,8 +221,13 @@ static int parse_extensions(const uint8_t *exts, size_t exts_len,
 static int parse_hello(const uint8_t *body, size_t len, int is_server_hello,
                       uint16_t *out_group, char *out_name, size_t out_cap,
                       char *out_sni, size_t sni_cap,
-                      uint16_t *out_cipher, char *out_cipher_name, size_t cipher_cap) {
+                      uint16_t *out_cipher, char *out_cipher_name, size_t cipher_cap,
+                      uint16_t *out_version) {
   if(len < 34) return 0;
+
+  /* Extract TLS version from first 2 bytes */
+  uint16_t version = be16(body);
+  if(out_version) *out_version = version;
 
   size_t off = 2 + 32; /* Skip version + random */
 
@@ -249,7 +279,70 @@ static int parse_hello(const uint8_t *body, size_t len, int is_server_hello,
   if(off + exts_len > len) return 0;
 
   return parse_extensions(body + off, exts_len, out_group, out_name, out_cap,
-                         out_sni, sni_cap);
+                         out_sni, sni_cap, is_server_hello, out_version);
+}
+
+/* Parse Certificate message and extract leaf cert fingerprint
+ * Certificate message format (TLS 1.2):
+ *   [certificates_length:3][cert_data:3+len][cert_data:3+len]...
+ * Each cert_data:
+ *   [cert_length:3][DER-encoded X.509 certificate]
+ */
+static int parse_certificate(const uint8_t *body, size_t len,
+                             char *out_fingerprint, size_t fp_cap,
+                             char *out_subject, size_t subj_cap,
+                             char *out_issuer, size_t issuer_cap) {
+  if(len < 3) return 0;
+
+  /* Total length of certificate chain */
+  uint32_t certs_len = be24(body);
+  if(3 + certs_len > len) return 0;
+
+  size_t off = 3;
+
+  /* Parse first (leaf) certificate only */
+  if(off + 3 > len) return 0;
+  uint32_t cert_len = be24(body + off);
+  off += 3;
+
+  if(off + cert_len > len || cert_len == 0) return 0;
+
+  const uint8_t *cert_der = body + off;
+
+  /* Compute SHA256 fingerprint of DER-encoded certificate */
+  if(out_fingerprint && fp_cap >= 65) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(cert_der, cert_len, hash);
+
+    /* Convert to hex string */
+    for(int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+      snprintf(out_fingerprint + (i * 2), 3, "%02x", hash[i]);
+    }
+    out_fingerprint[64] = '\0';
+  }
+
+  /* Parse X.509 certificate for subject/issuer */
+  if(out_subject || out_issuer) {
+    const unsigned char *p = cert_der;
+    X509 *x509 = d2i_X509(NULL, &p, cert_len);
+    if(x509) {
+      if(out_subject && subj_cap > 0) {
+        X509_NAME *subj = X509_get_subject_name(x509);
+        if(subj) {
+          X509_NAME_oneline(subj, out_subject, subj_cap);
+        }
+      }
+      if(out_issuer && issuer_cap > 0) {
+        X509_NAME *iss = X509_get_issuer_name(x509);
+        if(iss) {
+          X509_NAME_oneline(iss, out_issuer, issuer_cap);
+        }
+      }
+      X509_free(x509);
+    }
+  }
+
+  return 1;
 }
 
 /* Public FSM */
@@ -317,8 +410,10 @@ tlspqc_rc tls_pqc_feed(tls_pqc_fsm *f,
       f->hs_type = f->hs_hdr[0];
       f->hs_len = be24(f->hs_hdr + 1);
 
-      /* Only parse ClientHello or ServerHello */
-      if(f->hs_type != TLS_HS_CLIENT_HELLO && f->hs_type != TLS_HS_SERVER_HELLO) {
+      /* Only parse ClientHello, ServerHello, or Certificate */
+      if(f->hs_type != TLS_HS_CLIENT_HELLO &&
+         f->hs_type != TLS_HS_SERVER_HELLO &&
+         f->hs_type != TLS_HS_CERTIFICATE) {
         /* Reset to try next record */
         f->rec_hdr_have = 0;
         f->hs_hdr_have = 0;
@@ -346,16 +441,44 @@ tlspqc_rc tls_pqc_feed(tls_pqc_fsm *f,
       }
       if(f->body_have < f->body_need) return TLSPQC_IN_PROGRESS;
 
+      /* Handle Certificate message separately */
+      if(f->hs_type == TLS_HS_CERTIFICATE) {
+        if(parse_certificate(f->body, f->body_have,
+                             f->cert_fingerprint, sizeof(f->cert_fingerprint),
+                             f->cert_subject, sizeof(f->cert_subject),
+                             f->cert_issuer, sizeof(f->cert_issuer))) {
+          f->seen_certificate = 1;
+        }
+        /* Continue to look for more handshake messages */
+        f->rec_hdr_have = 0;
+        f->hs_hdr_have = 0;
+        f->st = TLS_S_REC_HDR;
+        continue;
+      }
+
       /* Parse the hello message */
       uint16_t gid = 0;
       char gname[64] = {0};
       char sni[256] = {0};
       uint16_t cipher_id = 0;
       char cipher_name[64] = {0};
+      uint16_t hello_version = 0;
       int is_sh = (f->hs_type == TLS_HS_SERVER_HELLO);
 
-      if(parse_hello(f->body, f->body_have, is_sh, &gid, gname, sizeof(gname),
-                     sni, sizeof(sni), &cipher_id, cipher_name, sizeof(cipher_name))) {
+      int parsed = parse_hello(f->body, f->body_have, is_sh, &gid, gname, sizeof(gname),
+                     sni, sizeof(sni), &cipher_id, cipher_name, sizeof(cipher_name),
+                     &hello_version);
+
+      /* Always store TLS version in FSM (even if no PQC groups found) */
+      if(hello_version) {
+        if(is_sh) {
+          f->negotiated_version = hello_version;
+        } else {
+          f->offered_version = hello_version;
+        }
+      }
+
+      if(parsed) {
         if(is_pqc_group(gid)) {
           strncpy(f->negotiated_group, gname, sizeof(f->negotiated_group) - 1);
           f->negotiated_group[sizeof(f->negotiated_group) - 1] = '\0';
