@@ -27,6 +27,9 @@ typedef enum {
   TLS_S_FAIL
 } tls_pqc_state;
 
+/* TLS max record size (RFC 8446) */
+#define TLS_MAX_RECORD_SIZE 16384
+
 /* Per-flow TLS parser state (bounded memory) */
 typedef struct {
   tls_pqc_state st;
@@ -43,8 +46,10 @@ typedef struct {
   uint8_t hs_type;
   uint32_t hs_len;
 
-  /* Handshake body buffer (ClientHello/ServerHello) */
-  uint8_t body[4096];
+  /* Handshake body buffer (ClientHello/ServerHello/Certificate)
+   * Sized to hold max TLS record (16KB) to capture certificate chains.
+   * TLS 1.2 certificates are sent in plaintext and can be large. */
+  uint8_t body[TLS_MAX_RECORD_SIZE];
   size_t body_have, body_need;
 
   /* Extracted data */

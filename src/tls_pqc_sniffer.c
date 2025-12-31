@@ -449,11 +449,9 @@ tlspqc_rc tls_pqc_feed(tls_pqc_fsm *f,
                              f->cert_issuer, sizeof(f->cert_issuer))) {
           f->seen_certificate = 1;
         }
-        /* Continue to look for more handshake messages */
-        f->rec_hdr_have = 0;
-        f->hs_hdr_have = 0;
-        f->st = TLS_S_REC_HDR;
-        continue;
+        /* After Certificate, we have what we need - mark as done */
+        f->st = TLS_S_DONE;
+        return f->negotiated_group[0] ? TLSPQC_FOUND_PQC : TLSPQC_FOUND_CLASSIC;
       }
 
       /* Parse the hello message */
@@ -510,9 +508,10 @@ tlspqc_rc tls_pqc_feed(tls_pqc_fsm *f,
       /* Mark which hello we've seen */
       if(is_sh) {
         f->seen_server_hello = 1;
-        /* If we saw ServerHello, we're done (has negotiated group) */
-        f->st = TLS_S_DONE;
-        return f->negotiated_group[0] ? TLSPQC_FOUND_CLASSIC : TLSPQC_IN_PROGRESS;
+        /* Continue parsing to capture Certificate (comes after ServerHello in TLS 1.2) */
+        f->rec_hdr_have = 0;
+        f->hs_hdr_have = 0;
+        f->st = TLS_S_REC_HDR;
       } else {
         f->seen_client_hello = 1;
         /* Continue to look for ServerHello */
